@@ -74,6 +74,27 @@ To stop all services:
 pkill -f "catalog/catalog.py"; pkill -f "order/order.py"; pkill -f "front_end/front_end.py"
 ```
 
+## Running with Docker
+
+Each service runs in its own container, addressing its peers by Docker Compose service name
+instead of `localhost`.
+
+```shell
+docker compose up --build
+```
+
+This builds `catalog`, three `order` replicas, and `front-end`, and publishes the front-end on
+`localhost:12345`. From a second terminal, point the client at it exactly as in local mode:
+
+```shell
+cd src && source venv/bin/activate
+python3 client/client.py --host localhost --port 12345 --t 1984 --p 0.5
+```
+
+```shell
+docker compose down   # stop and remove the containers
+```
+
 ## Running on the cloud
 
 `src/deploy/` provisions this onto any cloud VM you already have SSH access to (AWS, GCP,

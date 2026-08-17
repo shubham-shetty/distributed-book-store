@@ -17,12 +17,12 @@ import catalog_pb2_grpc
 
 class Order(order_pb2_grpc.OrderServicer):
     
-    def __init__(self, db_file="data/order_database.json", cat_host="localhost", cat_port="50042", order_service_ports=['50043', '50044', '50045']):
+    def __init__(self, db_file="data/order_database.json", cat_host="localhost", cat_port="50042", order_service_addrs=['localhost:50043', 'localhost:50044', 'localhost:50045']):
         self.db_file = db_file
         self.rw_lock = threading.Lock()
         self.cat_host = cat_host
         self.cat_port = cat_port
-        self.order_service_ports = order_service_ports
+        self.order_service_addrs = order_service_addrs
         # Init in-memory
         with open(db_file, 'r') as f:
             data = json.load(f)
@@ -35,14 +35,14 @@ class Order(order_pb2_grpc.OrderServicer):
 
         # Sync on Init
         sleep(1)
-        sync_replica = random.choice(self.order_service_ports)
+        sync_replica = random.choice(self.order_service_addrs)
         print(f"Syncing with {sync_replica} and order_num:{self.count}")
         self.do_sync(sync_replica, self.count)
 
-    
+
     def do_sync(self, sync_replica, order_num, prod_name=None, prod_qty=None):
         # Synchronize with other replicas on recovery and startup
-        with grpc.insecure_channel(f"localhost:{sync_replica}") as channel:
+        with grpc.insecure_channel(sync_replica) as channel:
             sync_stub = order_pb2_grpc.OrderStub(channel)
             sync_result = self.request_sync(sync_stub, str(order_num), prod_name, prod_qty)
             print(sync_result)
@@ -146,8 +146,8 @@ class Order(order_pb2_grpc.OrderServicer):
                 with open(self.db_file, 'w') as f:
                     json.dump(log, f)
                 buy_response = self.count
-                for order_service_port in self.order_service_ports:
-                    self.do_sync(order_service_port, buy_response, product_name, product_quantity)
+                for order_service_addr in self.order_service_addrs:
+                    self.do_sync(order_service_addr, buy_response, product_name, product_quantity)
 
         return order_pb2.BuyResponse(orderNumber=buy_response)
 
@@ -164,7 +164,7 @@ class Order(order_pb2_grpc.OrderServicer):
         else:
             return order_pb2.OrderQueryResponse(orderNumber="-1")
     
-def serve(num_threads, cat_host, cat_port, order_service_ports):
+def serve(num_threads, cat_host, cat_port, order_service_addrs):
     # Define database file for the service ID and synchronization lock
     global ORDER_PORT
     _DB = f'order/data/order_database_{ORDER_PORT}.json'
@@ -173,8 +173,8 @@ def serve(num_threads, cat_host, cat_port, order_service_ports):
     if not os.path.exists(_DB):
         f = open(_DB, 'x')
         f.write('{}')
-        f.close() 
-    order_service = Order(_DB, cat_host, cat_port, order_service_ports)
+        f.close()
+    order_service = Order(_DB, cat_host, cat_port, order_service_addrs)
 
     # Launch Service
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=num_threads))
@@ -195,6 +195,10 @@ def main():
     #parser.add_argument('--cat_port', default="50042", help='Catalog Service Port')
     #parser.add_argument('--id', default=0, help='ID of the order service, for leader election')
     parser.add_argument('--c', '--config', default='config.cfg', help='Config File')
+    parser.add_argument('--order_hosts', default=None,
+                         help='Comma-separated hosts for the order replicas, in the same order as '
+                              'order_ports in the config file (e.g. for one-container-per-replica '
+                              'deployments). Defaults to "localhost" for every replica.')
     args = parser.parse_args()
     logging.basicConfig()
 
@@ -203,14 +207,19 @@ def main():
     config.read(args.c)
     cnfg_dict = dict(config.items('DEV'))
 
-    # Define global ports
-    global ORDER_PORT, CATALOG_PORT, order_service_ports
+    # Define global ports/addresses
+    global ORDER_PORT, CATALOG_PORT
     CATALOG_PORT = cnfg_dict["catalog_port"]
-    order_service_ports = [port.strip() for port in cnfg_dict["order_ports"].split(",")]
+    order_ports = [port.strip() for port in cnfg_dict["order_ports"].split(",")]
+    order_hosts = [h.strip() for h in args.order_hosts.split(",")] if args.order_hosts \
+        else ["localhost"] * len(order_ports)
     ORDER_PORT = args.port
-    order_service_ports.remove(ORDER_PORT)
 
-    serve(int(args.num_threads), args.cat_host, CATALOG_PORT, order_service_ports)
+    # Peer replica addresses, excluding this instance's own port
+    peer_pairs = [(h, p) for h, p in zip(order_hosts, order_ports) if p != ORDER_PORT]
+    order_service_addrs = [f"{h}:{p}" for h, p in peer_pairs]
+
+    serve(int(args.num_threads), args.cat_host, CATALOG_PORT, order_service_addrs)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,33 @@
+services:
+  catalog:
+    build: ./src
+    command: python catalog/catalog.py -p 50042 -fh front-end -fp 12345
+
+  order-1:
+    build: ./src
+    command: python order/order.py -p 50043 --cat_host catalog --order_hosts ${ORDER_HOSTS:-order-1,order-2,order-3}
+    depends_on:
+      - catalog
+
+  order-2:
+    build: ./src
+    command: python order/order.py -p 50044 --cat_host catalog --order_hosts ${ORDER_HOSTS:-order-1,order-2,order-3}
+    depends_on:
+      - catalog
+
+  order-3:
+    build: ./src
+    command: python order/order.py -p 50045 --cat_host catalog --order_hosts ${ORDER_HOSTS:-order-1,order-2,order-3}
+    depends_on:
+      - catalog
+
+  front-end:
+    build: ./src
+    command: python front_end/front_end.py --hn 0.0.0.0 --p 12345 --catalog_host catalog --order_hosts ${ORDER_HOSTS:-order-1,order-2,order-3}
+    ports:
+      - "12345:12345"
+    depends_on:
+      - catalog
+      - order-1
+      - order-2
+      - order-3

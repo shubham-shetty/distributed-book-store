@@ -4,6 +4,7 @@ import json
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 import re
 import logging
+import time
 from collections import defaultdict
 from async_timeout import timeout
 
@@ -81,7 +82,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         if product_name in cache.keys():
             self._send_response(200, cache[product_name])
         else:
-            with grpc.insecure_channel(f"localhost:{CATALOG_PORT}") as channel:
+            with grpc.insecure_channel(CATALOG_ADDR) as channel:
                 catalog_stub = catalog_pb2_grpc.CatalogStub(channel)
                 payload = query(catalog_stub, product_name) 
             
@@ -106,9 +107,15 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
     def queryOrder(self):
         # Query order by order number
-        global ORDER_PORT
+        global ORDER_ADDR
         order_number = self.path.split('/')[-1]
-        with grpc.insecure_channel(f"localhost:{ORDER_PORT}") as channel:
+        if ORDER_ADDR is None:
+            ORDER_ADDR = pick_order_service_leader(order_service_addrs)
+        if ORDER_ADDR is None:
+            err = {"error": {"code": 503, "message": "Order service unavailable"}}
+            self._send_response(503, err)
+            return
+        with grpc.insecure_channel(ORDER_ADDR) as channel:
             order_stub = order_pb2_grpc.OrderStub(channel)
             try:
                 query_resp = order_query(order_stub, order_number)
@@ -116,7 +123,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                 #e.details()
                 status_code = e.code()
                 logging.debug(f"gRPC Exception {status_code.name}: {status_code.value}")
-                ORDER_PORT = pick_order_service_leader(order_service_ports)
+                ORDER_ADDR = pick_order_service_leader(order_service_addrs)
         if int(query_resp.orderNumber) <= 0:
             err = {
                 "error": {
@@ -154,7 +161,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
 
     def postOrder(self):
-        global ORDER_PORT
+        global ORDER_ADDR
         input_length = int(self.headers.get('content-length'))
         data = self.rfile.read(input_length).decode('utf8')
         json_data = json.loads(data)
@@ -162,10 +169,16 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         product_quantity = json_data["quantity"]
         order_flag = 0
         while order_flag == 0:
-            with grpc.insecure_channel(f"localhost:{ORDER_PORT}") as channel:
+            if ORDER_ADDR is None:
+                ORDER_ADDR = pick_order_service_leader(order_service_addrs)
+            if ORDER_ADDR is None:
+                err = {"error": {"code": 503, "message": "Order service unavailable"}}
+                self._send_response(503, err)
+                return
+            with grpc.insecure_channel(ORDER_ADDR) as channel:
                 order_stub = order_pb2_grpc.OrderStub(channel)
                 try:
-                    buy_resp = buy(order_stub, product_name, product_quantity) 
+                    buy_resp = buy(order_stub, product_name, product_quantity)
                     msg = int(buy_resp.orderNumber)
                     order_flag = 1
                 except grpc.RpcError as e:
@@ -173,7 +186,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                     print(f"Caused Exception {e}")
                     status_code = e.code()
                     logging.debug(f"gRPC Exception {status_code.name}: {status_code.value}")
-                    ORDER_PORT = pick_order_service_leader(order_service_ports)
+                    ORDER_ADDR = pick_order_service_leader(order_service_addrs)
         # If the order number is valid
         print(f"orderNumber: {msg}")
         if msg > 0:
@@ -228,33 +241,39 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                 del cache[product_name]
 
 
-def pick_order_service_leader(order_service_ports):
+def pick_order_service_leader(order_service_addrs, retries=15, retry_delay=1):
     '''
-    Picks the order service leader on startup
+    Picks the order service leader on startup, retrying briefly in case the
+    order replicas are still coming up (e.g. containers starting concurrently).
     '''
-    for order_service_port in order_service_ports:
-        with grpc.insecure_channel(f"localhost:{order_service_port}") as channel:
-            order_stub = order_pb2_grpc.OrderStub(channel)
-            try:
-                health_check_resp = health_check(order_stub)
-                if health_check_resp.healthy == 1:
-                    notify_non_leaders(order_service_ports, order_service_port)
-                    return order_service_port
-            except grpc.RpcError as e:
-                #e.details()
-                status_code = e.code()
-                logging.debug(f"gRPC Exception {status_code.name}: {status_code.value}")
-                continue
+    for attempt in range(retries):
+        for order_service_addr in order_service_addrs:
+            with grpc.insecure_channel(order_service_addr) as channel:
+                order_stub = order_pb2_grpc.OrderStub(channel)
+                try:
+                    health_check_resp = health_check(order_stub)
+                    if health_check_resp.healthy == 1:
+                        notify_non_leaders(order_service_addrs, order_service_addr)
+                        return order_service_addr
+                except grpc.RpcError as e:
+                    #e.details()
+                    status_code = e.code()
+                    logging.debug(f"gRPC Exception {status_code.name}: {status_code.value}")
+                    continue
+        if attempt < retries - 1:
+            logging.debug("No order service leader found, retrying...")
+            time.sleep(retry_delay)
+    return None
 
 
-def notify_non_leaders(order_service_ports, order_service_leader):
+def notify_non_leaders(order_service_addrs, order_service_leader):
     '''
     Notifies non-leaders of the leader
     '''
-    for order_service_port in order_service_ports:
-        if order_service_port != order_service_leader:
-            with grpc.insecure_channel(f"localhost:{order_service_port}") as channel:
-                try: 
+    for order_service_addr in order_service_addrs:
+        if order_service_addr != order_service_leader:
+            with grpc.insecure_channel(order_service_addr) as channel:
+                try:
                     order_stub = order_pb2_grpc.OrderStub(channel)
                     notify_resp = notify(order_stub, order_service_leader)
                 except grpc.RpcError as e:
@@ -276,6 +295,11 @@ def main():
     parser.add_argument('--hn', '--hostname', default='localhost', help='HTTP Server Hostname (IP)')
     parser.add_argument('--p', '--port', type=int, default=12345, help='Listening port for HTTP Server')
     parser.add_argument('--c', '--config', default='config.cfg', help='Config File for Order Server Ports')
+    parser.add_argument('--catalog_host', default='localhost', help='Catalog Service Host (e.g. a container/service name)')
+    parser.add_argument('--order_hosts', default=None,
+                         help='Comma-separated hosts for the order replicas, in the same order as '
+                              'order_ports in the config file (e.g. for one-container-per-replica '
+                              'deployments). Defaults to "localhost" for every replica.')
     args = parser.parse_args()
 
     # Read Config
@@ -283,12 +307,15 @@ def main():
     config.read(args.c)
     cnfg_dict = dict(config.items('DEV'))
 
-    # Pick a leader, define global ports
-    global ORDER_PORT, CATALOG_PORT, order_service_ports
-    CATALOG_PORT = cnfg_dict["catalog_port"]
-    order_service_ports = [port.strip() for port in cnfg_dict["order_ports"].split(",")]
-    ORDER_PORT = pick_order_service_leader(order_service_ports)
-    print("Order Service Leader: ", ORDER_PORT)
+    # Pick a leader, define global addresses
+    global ORDER_ADDR, CATALOG_ADDR, order_service_addrs
+    CATALOG_ADDR = f"{args.catalog_host}:{cnfg_dict['catalog_port']}"
+    order_ports = [port.strip() for port in cnfg_dict["order_ports"].split(",")]
+    order_hosts = [h.strip() for h in args.order_hosts.split(",")] if args.order_hosts \
+        else ["localhost"] * len(order_ports)
+    order_service_addrs = [f"{h}:{p}" for h, p in zip(order_hosts, order_ports)]
+    ORDER_ADDR = pick_order_service_leader(order_service_addrs)
+    print("Order Service Leader: ", ORDER_ADDR)
 
     # Start Front-End Server
     server = ThreadingHTTPServer((args.hn, args.p), HTTPRequestHandler)

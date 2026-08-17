@@ -31,3 +31,13 @@ out synchronously to a peer service that isn't running in isolation, so they onl
 full stack is already up via `../src/build.sh`.
 
 Reference - https://github.com/kataev/pytest-grpc
+
+## Benchmarking the cache
+
+With the full stack running (`../src/build.sh`), `bench_cache_latency.py` measures the latency
+difference between a cache miss (gRPC round-trip to the Catalog service) and a cache hit
+(served from the front-end's in-memory dict):
+
+```shell
+python3 bench_cache_latency.py --host localhost --port 12345 --trials 100
+```

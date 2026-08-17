@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+message BuyRequest{
+    string productName = 1;
+    optional int32 quantity = 2;
+}
+
+message BuyResponse{
+    optional float orderNumber = 1;
+}
+
+message OrderQueryRequest{
+    string orderNumber = 1;
+}
+
+message OrderQueryResponse{
+    string orderNumber = 1;
+    optional string productName = 2;
+    optional int32 productQty = 3;
+}
+
+message HealthCheckRequest{
+    int32 healthCheck = 1;
+}
+
+message HealthCheckResponse{
+    int32 healthy = 1;
+}
+
+message NotifyRequest{
+    string leader = 1;
+}
+
+message NotifyResponse{
+    string response = 1;
+}
+
+message SyncRequest{
+    string orderNumber = 1;
+    optional string productName = 2;
+    optional int32 productQty = 3;
+}
+
+message SyncResponse{
+    string response = 1;
+    optional string orderNumber = 2;
+    optional string productName = 3;
+    optional int32 productQty = 4;
+}
+
+service Order{
+    // Define RPC to execute buy from catalog and return order_id
+    rpc Buy(BuyRequest) returns (BuyResponse) {}
+
+    // Define RPC to query orders
+    rpc OrderQuery(OrderQueryRequest) returns (OrderQueryResponse) {}
+
+    // Define RPC for health check
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+
+    // Define RPC for notifying non-leader order services
+    rpc Notify(NotifyRequest) returns (NotifyResponse) {}
+
+    // Sync request
+    rpc Sync(SyncRequest) returns (stream SyncResponse) {}
+}

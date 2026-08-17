@@ -1,0 +1,15 @@
+async-timeout==4.0.2
+grpcio
+grpcio-tools
+httplib2==0.14.0
+oauthlib==3.1.0
+protobuf
+pytest==7.1.2
+pytest-grpc==0.8.0
+PyYAML==5.3.1
+requests==2.22.0
+requests-unixsocket==0.2.0
+tqdm==4.63.0
+urllib3==1.25.8
+virtualenv==20.13.0
+websocket-client==0.53.0

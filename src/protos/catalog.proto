@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+message QueryRequest{
+    string productName = 1;
+}
+
+message QueryResponse{
+    string productName = 1;
+    optional float price = 2;
+    optional int32 quantity = 3;
+}
+
+message UpdateRequest{
+    string productName = 1;
+    optional int32 quantity = 2;
+}
+
+message UpdateResponse{
+    int32 response = 1;
+}
+
+service Catalog{
+    // Define RPC to query inventory and return cost and current stock of product
+    rpc Query(QueryRequest) returns (QueryResponse) {}
+
+    // Define RPC to update the inventory database
+    rpc Update(UpdateRequest) returns (UpdateResponse) {}
+}

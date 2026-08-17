@@ -27,7 +27,7 @@ fi
 : "${REMOTE_USER:?Set REMOTE_USER in deploy.env}"
 : "${REMOTE_HOST:?Set REMOTE_HOST in deploy.env}"
 REMOTE_PORT="${REMOTE_PORT:-22}"
-REMOTE_DIR="${REMOTE_DIR:-~/distributed-store-src}"
+REMOTE_DIR="${REMOTE_DIR:-~/distributed-book-store-src}"
 
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
 SSH="ssh -i $SSH_KEY_PATH -p $REMOTE_PORT -o StrictHostKeyChecking=accept-new $REMOTE_USER@$REMOTE_HOST"
